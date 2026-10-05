@@ -64,6 +64,12 @@
       if (!state.moedores.some((x) => x.modeloId === mm.id)) state.moedores.push({ id: uid(), modeloId: mm.id, nome: mm.nome, tipo: mm.tipo, min: mm.min, max: mm.max, passo: mm.passo, direcao: mm.direcao, passoAjuste: mm.passoAjuste, refs: { ...mm.refs }, obs: mm.obs });
       state.config.moedoresVersao = 6; save();
     }
+    if (!state.config.estoqueV2) { // moedor padrão E55 Pro; grãos que já zeraram ficam sem estoque
+      const e55 = state.moedores.find((x) => x.modeloId === 'starseeker-e55-pro');
+      if (e55 && !state.config.moedorPadrao) state.config.moedorPadrao = e55.id;
+      state.graos.forEach((g) => { const r = restante(g); if (r != null && r <= 0) g.semEstoque = true; });
+      state.config.estoqueV2 = true; save();
+    }
     if (!state.config.dose10) { // receitas de partida refeitas com 10 g (espresso 18 g); extrações registradas não mudam
       state.graos.forEach((g) => { if (g.dosePadrao != null) g.dosePadrao = null; });
       state.config.dose10 = true; save();
@@ -76,6 +82,8 @@
   }
   const grao = (id) => state.graos.find((g) => g.id === id);
   const moedor = (id) => state.moedores.find((m) => m.id === id);
+  /* Moedor padrão das telas de extração (configurável em Equipamentos; padrão de fábrica: E55 Pro) */
+  const moedorPadrao = () => moedor(state.config.moedorPadrao) || state.moedores.find((m) => m.modeloId === 'starseeker-e55-pro') || state.moedores[0] || null;
   const extracao = (id) => state.extracoes.find((x) => x.id === id);
   const metodo = (id) => DB.metodo[id];
 
@@ -318,10 +326,22 @@
   }
 
   /* ---------- Estoque ---------- */
+  const pacotes = (g) => (g && g.pacotes != null && g.pacotes !== '' ? Math.max(0, +g.pacotes) : 1);
   function restante(g) {
     if (!g || !(+g.pesoPacote)) return null;
     const usado = state.extracoes.filter((x) => x.graoId === g.id).reduce((s, x) => s + (+x.dose || 0), 0);
-    return Math.max(0, Math.round(+g.pesoPacote - (+g.usadoAntes || 0) - usado));
+    return Math.max(0, Math.round(pacotes(g) * +g.pesoPacote - (+g.usadoAntes || 0) - usado));
+  }
+  /* Sem estoque: marcado à mão ou automaticamente quando o estoque chega a 0; some das telas de extração */
+  const disponivel = (g) => g && !g.arquivado && !g.semEstoque;
+  function marcarSeZerou(g, antes) {
+    if (!g || g.semEstoque) return;
+    const r = restante(g);
+    if (r != null && r <= 0 && (antes == null || antes > 0)) { g.semEstoque = true; setTimeout(() => toast(`${g.nome} acabou: marcado como sem estoque`), 2700); }
+  }
+  function addPacote(g, n) {
+    g.pacotes = pacotes(g) + (n || 1);
+    if (g.semEstoque && restante(g) > 0) delete g.semEstoque;
   }
   function dosesRestantes(g, r) {
     const xs = state.extracoes.filter((x) => x.graoId === g.id);
@@ -329,12 +349,13 @@
     return Math.floor(r / dose);
   }
   function estoqueResumo() {
-    const ativos = state.graos.filter((g) => !g.arquivado && restante(g) != null);
+    const ativos = state.graos.filter((g) => disponivel(g) && restante(g) != null);
     const gramas = ativos.reduce((s, g) => s + restante(g), 0);
     const acabando = ativos.filter((g) => restante(g) > 0 && dosesRestantes(g, restante(g)) <= 3).length;
     return { total: ativos.length, gramas, acabando };
   }
   function badgeEstoque(g) {
+    if (g.semEstoque) return '<span class="badge">sem estoque</span>';
     const r = restante(g); if (r == null) return '';
     const d = dosesRestantes(g, r);
     return r <= 0 ? '<span class="badge">acabou</span>' : `<span class="badge ${d <= 3 ? 'sobre' : ''}">${d <= 3 ? '⚠ ' : ''}${r} g · ~${d} doses</span>`;
@@ -498,9 +519,9 @@
     const from = editando || (r.q.from ? extracao(r.q.from) : null);
     const copiar = !!r.q.copiar, repetir = !!r.q.repetir;
     const pre = {
-      graoId: (from && from.graoId) || r.q.grao || state.graos[0].id,
+      graoId: (from && from.graoId) || r.q.grao || (state.graos.find(disponivel) || state.graos[0]).id,
       metodoId: (from && from.metodoId) || (metodo(r.q.metodo) && r.q.metodo) || (metodosVisiveis()[0] || DB.metodo.v60).id,
-      moedorId: (from && from.moedorId) || r.q.moedor || (state.moedores[0] || {}).id || ''
+      moedorId: (from && from.moedorId) || r.q.moedor || (moedorPadrao() || {}).id || ''
     };
     const mVia = r.q.via === 'metodo' ? metodo(pre.metodoId) : null;
     view.innerHTML = `
@@ -509,7 +530,7 @@
       <form id="fNova" autocomplete="off">
         <div class="card">
           <div class="form-grid">
-            <label class="field"><span class="lbl">Grão</span>${sel('graoId', state.graos.filter((g) => !g.arquivado || g.id === pre.graoId).map((g) => ({ id: g.id, nome: g.nome })), pre.graoId)}</label>
+            <label class="field"><span class="lbl">Grão</span>${sel('graoId', state.graos.filter((g) => disponivel(g) || g.id === pre.graoId).map((g) => ({ id: g.id, nome: g.nome + (g.semEstoque ? ' (sem estoque)' : '') })), pre.graoId)}</label>
             <label class="field"><span class="lbl">Método</span>${sel('metodoId', DB.metodos.filter((m) => metodoVisivel(m) || m.id === pre.metodoId).map((m) => ({ id: m.id, nome: m.nome })), pre.metodoId)}</label>
             <label class="field"><span class="lbl">Moedor</span>${sel('moedorId', [{ id: '', nome: '— sem moedor —' }].concat(state.moedores.map((m) => ({ id: m.id, nome: m.nome }))), pre.moedorId)}</label>
             <label class="field"><span class="lbl">Data e hora</span><input type="datetime-local" name="data" value="${editando ? isoLocal(editando.data) : nowLocal()}"></label>
@@ -768,11 +789,13 @@
       };
       if (E.isEspresso(m)) x.yieldG = x.water;
       x.diag = E.diagnose(x, m, g);
+      const estoqueAntes = restante(g);
       if (editando) {
         const i = state.extracoes.findIndex((e) => e.id === editando.id);
         const novo = Object.assign({}, editando, x, { editadoEm: new Date().toISOString() });
         if (!E.isEspresso(m)) delete novo.yieldG;
         state.extracoes[i] = novo;
+        marcarSeZerou(g, editando.graoId === g.id ? estoqueAntes : null);
         hooks.extracaoEditada.forEach((fn) => fn(novo, g, m, editando));
         save();
         toast('Registro atualizado');
@@ -780,6 +803,7 @@
         return;
       }
       state.extracoes.push(x);
+      marcarSeZerou(g, estoqueAntes);
       hooks.extracaoSalva.forEach((fn) => fn(x, g, m));
       save();
       toast('Extração registrada');
@@ -796,7 +820,7 @@
   }
   /* Grãos ativos ordenados pela aptidão ao método (terroir, torra, perfil, histórico, estoque) */
   function cafesParaMetodo(m) {
-    return state.graos.filter((g) => !g.arquivado).map((g) => {
+    return state.graos.filter(disponivel).map((g) => {
       const hist = state.extracoes.filter((x) => x.graoId === g.id && x.metodoId === m.id).sort((a, b) => new Date(a.data) - new Date(b.data)).map(withDiag);
       const apt = E.aptidao(g, m, { historico: hist });
       const r = restante(g);
@@ -826,7 +850,7 @@
     if (!m) { view.innerHTML = '<div class="empty">Método não encontrado.</div>'; return; }
     $('#title').textContent = nomeCurto(m);
     const lista = cafesParaMetodo(m);
-    const md = state.moedores[0];
+    const md = moedorPadrao();
     const T = E.faixaTempo(m, m.dosePadrao);
     const agua = E.isEspresso(m) ? Math.round(m.dosePadrao * m.ratio.padrao * 10) / 10 : Math.round(m.dosePadrao * m.ratio.padrao);
     const item = (c) => {
@@ -858,11 +882,11 @@
       </div>
       <p class="text-2" style="margin:8px 0 0"><small>${esc(m.receita || '')}</small></p>
       <div class="section-title"><h2>Cafés recomendados</h2>${m.custom ? `<a href="#/equipamentos?metodo=${m.id}">editar método</a>` : ''}</div>
+      ${state.graos.length && !lista.length ? `<div class="empty"><div class="big">${BEAN}</div>Nenhum café com estoque. Adicione pacotes na página do grão.</div>` : ''}
       ${!state.graos.length ? `<div class="empty"><div class="big">${BEAN}</div>Cadastre seus grãos para receber indicações.<div style="margin-top:12px"><a class="btn primary" href="#/graos?novo=1">Cadastrar grão</a></div></div>` : ''}
       ${top.length ? `<div class="list">${top.map(item).join('')}</div>` : state.graos.length ? '<div class="card soft"><small>Nenhum café do estoque se destaca neste método. Veja abaixo os que também funcionam.</small></div>' : ''}
       ${meio.length ? `<div class="section-title"><h3 style="margin:0">Também funcionam</h3></div><div class="list">${meio.map(item).join('')}</div>` : ''}
       ${baixo.length ? `<details class="lib" style="margin-top:12px"><summary>Pouco indicados (${baixo.length})</summary><div class="list" style="padding:8px">${baixo.map(item).join('')}</div></details>` : ''}
-      ${sem.length ? `<details class="lib" style="margin-top:8px"><summary>Sem estoque (${sem.length})</summary><div class="list" style="padding:8px">${sem.map(item).join('')}</div></details>` : ''}
       <p style="margin-top:12px"><small class="muted">A indicação combina terroir, torra, perfil (acidez, corpo, doçura), notas, processo, dias de torra e o que você já registrou neste método.${md ? ` Cliques para ${esc(md.nome)}.` : ''}</small></p>`;
   }
 
@@ -878,9 +902,11 @@
           <div class="s">${esc(m.tipo)} · ${E.fmtN(m.dosePadrao)} g · 1:${E.fmtN(m.ratio.padrao)} · ${E.fmtN(m.tempC.padrao)} °C${m.custom ? ` · base ${esc(nomeCurto(metodo(m.baseEscolhida) || {}))}` : ''}${usoM(m.id) ? ` · ${usoM(m.id)} extração(ões)` : ''}</div></div>
         <div>›</div></div>`).join('')}</div>
       <div class="section-title"><h2>Moedores</h2><button class="btn sm" id="novoMo">＋ Novo moedor</button></div>
-      <div class="list">${state.moedores.length ? state.moedores.map((md) => `<div class="item" data-mo="${md.id}"><div class="ico">⚙️</div><div><div class="t">${esc(md.nome)}</div><div class="s">${esc(md.tipo)} · escala ${md.min}–${md.max}, passo ${md.passo}${md.umPorClique ? ` · ${E.fmtN(md.umPorClique)} µm/clique` : ''}</div></div><div>›</div></div>`).join('') : '<div class="empty">Nenhum moedor cadastrado.</div>'}</div>`;
+      ${state.moedores.length ? `<label class="field"><span class="lbl">Moedor padrão nas extrações (por grão e por método)</span>${sel('moedorPadrao', state.moedores.map((x) => ({ id: x.id, nome: x.nome })), (moedorPadrao() || {}).id, 'id="moPadrao"')}</label>` : ''}
+      <div class="list">${state.moedores.length ? state.moedores.map((md) => `<div class="item" data-mo="${md.id}"><div class="ico">⚙️</div><div><div class="t">${esc(md.nome)} ${moedorPadrao() && moedorPadrao().id === md.id ? '<span class="badge ok">padrão</span>' : ''}</div><div class="s">${esc(md.tipo)} · escala ${md.min}–${md.max}, passo ${md.passo}${md.umPorClique ? ` · ${E.fmtN(md.umPorClique)} µm/clique` : ''}</div></div><div>›</div></div>`).join('') : '<div class="empty">Nenhum moedor cadastrado.</div>'}</div>`;
     $('#novoMet').onclick = () => formMetodo();
     $('#novoMo').onclick = () => formMoedor();
+    if ($('#moPadrao')) $('#moPadrao').onchange = (e) => { state.config.moedorPadrao = e.target.value; save(); toast('Moedor padrão atualizado'); render(); };
     $$('[data-met]', view).forEach((el) => (el.onclick = () => { const m = metodo(el.dataset.met); if (m.custom) formMetodo(state.metodos.find((c) => c.id === m.id)); else detalheMetodoNativo(m); }));
     $$('[data-mo]', view).forEach((el) => (el.onclick = () => formMoedor(moedor(el.dataset.mo))));
     if (r.q.novoMetodo) { history.replaceState(null, '', '#/equipamentos'); formMetodo(); }
@@ -1012,17 +1038,35 @@
   /* ======================= GRÃOS ======================= */
   routes.graos = (view, r) => {
     $('#title').textContent = 'Grãos';
-    const gs = state.graos.slice().sort((a, b) => (a.arquivado === b.arquivado ? 0 : a.arquivado ? 1 : -1));
-    if (r.q.estoque) gs.sort((a, b) => { const ra = restante(a), rb = restante(b); return (ra == null ? 1e9 : ra) - (rb == null ? 1e9 : rb); });
+    const ordem = ['estoque', 'nome', 'torrefacao'].includes(state.config.ordemGraos) ? state.config.ordemGraos : 'estoque';
+    const col = new Intl.Collator('pt-BR', { sensitivity: 'base', numeric: true });
+    const grupo = (g) => (g.arquivado ? 2 : g.semEstoque ? 1 : 0); // ativos → sem estoque → arquivados
+    const torr = (g) => (g.torrefacao || '').trim();
+    const gs = state.graos.slice().sort((a, b) => grupo(a) - grupo(b) || (
+      ordem === 'nome' ? col.compare(a.nome, b.nome)
+        : ordem === 'torrefacao' ? (!torr(a) - !torr(b)) || col.compare(torr(a), torr(b)) || col.compare(a.nome, b.nome)
+          : ((restante(a) == null ? 1e9 : restante(a)) - (restante(b) == null ? 1e9 : restante(b))) || col.compare(a.nome, b.nome)));
+    let cab = '';
+    const cabecalho = (g) => { // títulos de grupo: torrefação e "sem estoque"/"arquivados"
+      const k = grupo(g) === 1 ? '#sem' : grupo(g) === 2 ? '#arq' : ordem === 'torrefacao' ? torr(g) || 'Sem torrefação informada' : '';
+      if (k === cab) return ''; cab = k;
+      return k ? `<div class="list-grupo">${esc(k === '#sem' ? 'Sem estoque' : k === '#arq' ? 'Arquivados' : k)}</div>` : '';
+    };
     view.innerHTML = `
       <div class="row between"><h2 style="margin:0">${r.q.estoque ? 'Estoque' : 'Seus grãos'}</h2><button class="btn primary sm" id="novo">＋ Novo grão</button></div>
-      ${r.q.estoque ? `<small class="muted">Ordenado pelo que está acabando. O estoque desconta a dose de cada extração registrada. ${estoqueResumo().gramas} g no total.</small>` : ''}
+      <label class="field ordem-graos"><span class="lbl">Ordenar por</span><select id="ordemGraos">
+        <option value="estoque" ${ordem === 'estoque' ? 'selected' : ''}>Quantidade restante (menor primeiro)</option>
+        <option value="nome" ${ordem === 'nome' ? 'selected' : ''}>Nome (A–Z)</option>
+        <option value="torrefacao" ${ordem === 'torrefacao' ? 'selected' : ''}>Torrefação</option>
+      </select></label>
+      <small class="muted">${estoqueResumo().gramas} g em estoque. O estoque desconta a dose de cada extração registrada; cafés sem estoque não aparecem nas telas de extração.</small>
       <div class="list" style="margin-top:12px">${gs.length ? gs.map((g) => {
         const n = state.extracoes.filter((x) => x.graoId === g.id).length;
-        return `<div class="item" onclick="location.hash='#/grao/${g.id}'">${icoGrao(g)}
+        return `${cabecalho(g)}<div class="item${g.semEstoque || g.arquivado ? ' apagado' : ''}" onclick="location.hash='#/grao/${g.id}'">${icoGrao(g)}
           <div><div class="t">${esc(g.nome)} ${g.arquivado ? '<span class="badge">arquivado</span>' : ''} ${badgeEstoque(g)}</div><div class="s">${esc((DB.regiao[g.regiao] || {}).nome || '')} · ${esc(((DB.processo[g.processo] || {}).nome || '').split(' (')[0])} · torra ${esc(((DB.torra[g.torra] || {}).nome || '').toLowerCase())}${g.dataTorra ? ' · torrado em ' + fmtDia(g.dataTorra) : ''}</div>${g.torrefacao ? `<div class="s">${esc(g.torrefacao)}${g.kit ? ' · ' + esc(g.kit) : ''}</div>` : ''}</div>
           <div class="right"><div class="score">${n}</div><small>extr.</small></div></div>`;
-      }).join('') : '<div class="empty"><div class="big">${BEAN}</div>Nenhum grão cadastrado.</div>'}</div>`;
+      }).join('') : `<div class="empty"><div class="big">${BEAN}</div>Nenhum grão cadastrado.</div>`}</div>`;
+    $('#ordemGraos').onchange = (e) => { state.config.ordemGraos = e.target.value; save(); render(); };
     $('#novo').onclick = () => formGrao();
     if (r.q.novo) { history.replaceState(null, '', '#/graos'); formGrao(); }
   };
@@ -1059,7 +1103,9 @@
           <label class="field"><span class="lbl">Altitude (m)</span><input type="number" name="altitude" value="${esc(g.altitude || '')}" inputmode="numeric"></label>
           <label class="field"><span class="lbl">Dose padrão fora do espresso (g, opcional)</span><input type="number" name="dosePadrao" value="${esc(g.dosePadrao || '')}" inputmode="decimal" step="0.1"></label>
           <label class="field"><span class="lbl">Peso do pacote (g)</span><input type="number" name="pesoPacote" value="${esc(g.pesoPacote || '')}" inputmode="numeric" placeholder="ex.: 250"></label>
+          <label class="field"><span class="lbl">Pacotes comprados</span><input type="number" name="pacotes" value="${g.id ? pacotes(g) : 1}" min="0" step="1" inputmode="numeric"><div class="help">Total desde o cadastro. Cada pacote soma o peso acima ao estoque.</div></label>
           <label class="field"><span class="lbl">Já usado antes do app (g)</span><input type="number" name="usadoAntes" value="${esc(g.usadoAntes || '')}" inputmode="numeric" placeholder="0"></label>
+          <label class="check full" style="margin:2px 0 10px"><input type="checkbox" name="semEstoque" ${g.semEstoque ? 'checked' : ''}> Sem estoque <small class="muted">(não aparece nas telas de extração; marca sozinho quando o estoque zera)</small></label>
           <label class="field"><span class="lbl">Pontuação (SCA)</span><input type="text" name="pontuacao" value="${esc(g.pontuacao || '')}" placeholder="ex.: 86+"></label>
           <label class="field"><span class="lbl">Kit / origem da compra</span><input type="text" name="kit" value="${esc(g.kit || '')}"></label>
           <label class="field full"><span class="lbl">Link da loja</span><input type="text" name="link" value="${esc(g.link || '')}" inputmode="url" placeholder="https://"></label>
@@ -1137,7 +1183,15 @@
         e.preventDefault();
         const o = { ...g, id: g.id || uid(), nome: F('nome').value.trim(), produtor: F('produtor').value.trim(), torrefacao: F('torrefacao').value.trim(), regiao: F('regiao').value, variedade: F('variedade').value.trim(), processo: F('processo').value, torra: F('torra').value, especie: F('especie').value, dataTorra: F('dataTorra').value, altitude: F('altitude').value ? +F('altitude').value : null, dosePadrao: F('dosePadrao').value ? +F('dosePadrao').value : null, acidez: +F('acidez').value, corpo: +F('corpo').value, docura: +F('docura').value, notas: chipsVal(sheet, 'notas'), obs: F('obs').value.trim(), pesoPacote: F('pesoPacote').value ? +F('pesoPacote').value : null, usadoAntes: F('usadoAntes').value ? +F('usadoAntes').value : 0, pontuacao: F('pontuacao').value.trim(), kit: F('kit').value.trim(), link: F('link').value.trim(), criadoEm: g.criadoEm || new Date().toISOString() };
         if (foto) o.foto = foto; else delete o.foto;
-        if (isNew) state.graos.push(o); else { Object.assign(g, o); if (!foto) delete g.foto; }
+        // pacotes e "sem estoque": adicionar pacotes desmarca sozinho; a caixa manda quando você a mexe
+        o.pacotes = F('pacotes').value === '' ? 1 : Math.max(0, Math.round(+F('pacotes').value));
+        const caixa = F('semEstoque').checked, caixaMexida = caixa !== !!g.semEstoque;
+        const maisPacotes = o.pacotes > pacotes(g) && !isNew;
+        if (caixaMexida) o.semEstoque = caixa;
+        else if (maisPacotes) o.semEstoque = false;
+        if (!o.semEstoque) delete o.semEstoque;
+        if (isNew) state.graos.push(o); else { Object.assign(g, o); if (!foto) delete g.foto; if (!o.semEstoque) delete g.semEstoque; }
+        if (!o.semEstoque && !caixaMexida) marcarSeZerou(isNew ? o : g, null);
         save(); closeModal(); toast(isNew ? 'Grão cadastrado' : 'Grão atualizado');
         if (isNew) go(`#/grao/${o.id}`); else render();
       });
@@ -1164,7 +1218,10 @@
           <span class="chip static">📍 ${esc(reg.nome)}</span><span class="chip static">${esc(proc ? proc.nome.split(' (')[0] : '')}</span><span class="chip static">🔥 ${esc(tor ? tor.nome : '')}</span>
           ${g.variedade ? `<span class="chip static">🌱 ${esc(g.variedade)}</span>` : ''}${g.altitude ? `<span class="chip static">⛰️ ${g.altitude} m</span>` : ''}${g.pontuacao ? `<span class="chip static">⭐ ${esc(g.pontuacao)}</span>` : ''}${g.dataTorra ? `<span class="chip static">📅 ${fmtDia(g.dataTorra)} (${Math.floor((Date.now() - new Date(g.dataTorra)) / 86400000)} d)</span>` : '<span class="chip static" style="color:var(--sobre)">📅 data da torra não informada</span>'}
         </div>
-        ${restante(g) != null ? `<p style="margin:8px 0 0">📦 Estoque: ${badgeEstoque(g)} <small class="muted">de ${g.pesoPacote} g</small></p>` : ''}
+        <div class="estoque-linha">
+          <span>📦 Estoque: ${restante(g) != null ? `${badgeEstoque(g)} <small class="muted">${pacotes(g)} pacote${pacotes(g) === 1 ? '' : 's'} de ${g.pesoPacote} g</small>` : `<small class="muted">${g.semEstoque ? '<span class="badge">sem estoque</span> ' : ''}informe o peso do pacote</small>`}</span>
+          <span class="row" style="gap:6px">${+g.pesoPacote ? '<button class="btn sm" id="maisPacote">＋1 pacote</button>' : ''}<label class="check"><input type="checkbox" id="semEst" ${g.semEstoque ? 'checked' : ''}> Sem estoque</label></span>
+        </div>
         ${g.kit ? `<p class="text-2" style="margin:8px 0 0"><small>🛒 ${esc(g.kit)}${g.link ? ` · <a href="${esc(g.link)}" target="_blank" rel="noopener">página do café ↗</a>` : ''}</small></p>` : ''}
         ${g.obs ? `<p class="text-2" style="margin:8px 0 0"><small>📝 ${esc(g.obs)}</small></p>` : ''}
         ${g.notas && g.notas.length ? `<p class="text-2" style="margin:8px 0 0"><small>${g.notas.map(esc).join(' · ')}</small></p>` : ''}
@@ -1196,12 +1253,14 @@
 
       <div class="section-title"><h2>Pontos de partida por método</h2></div>
       <div class="tbl-wrap"><table class="tbl tbl-stack"><thead><tr><th>Método</th><th>Razão</th><th>Temp.</th><th>Moagem</th><th>Tempo</th></tr></thead><tbody>
-        ${metodosVisiveis().map((m) => { const md = state.moedores[0]; const sp = E.startingPoint(g, m, md); return `<tr><td><span>${m.icone} ${esc(m.nome)}${reg.metodos.includes(m.id) || reg.metodos.includes(E.baseId(m)) ? ' <span class="badge ok">indicado</span>' : ''}</span></td><td>1:${sp.ratio}</td><td>${sp.tempC} °C</td><td>${sp.clicks != null ? E.fmtClicks(sp.clicks) + ' cl' : m.grindDesc}</td><td>${E.fmtTempo(m.tempoS.min)}–${E.fmtTempo(m.tempoS.max)}</td></tr>`; }).join('')}
+        ${metodosVisiveis().map((m) => { const md = moedorPadrao(); const sp = E.startingPoint(g, m, md); return `<tr><td><span>${m.icone} ${esc(m.nome)}${reg.metodos.includes(m.id) || reg.metodos.includes(E.baseId(m)) ? ' <span class="badge ok">indicado</span>' : ''}</span></td><td>1:${sp.ratio}</td><td>${sp.tempC} °C</td><td>${sp.clicks != null ? E.fmtClicks(sp.clicks) + ' cl' : m.grindDesc}</td><td>${E.fmtTempo(m.tempoS.min)}–${E.fmtTempo(m.tempoS.max)}</td></tr>`; }).join('')}
       </tbody></table></div>
-      ${state.moedores.length ? `<small class="muted">Cliques calculados para ${esc(state.moedores[0].nome)}.</small>` : '<small class="muted">Cadastre um moedor para ver cliques.</small>'}
+      ${state.moedores.length ? `<small class="muted">Cliques calculados para ${esc(moedorPadrao().nome)} (moedor padrão).</small>` : '<small class="muted">Cadastre um moedor para ver cliques.</small>'}
       <div class="row" style="margin-top:16px"><button class="btn sm" id="arq">${g.arquivado ? 'Reativar grão' : 'Arquivar grão'}</button></div>`;
     $('#edit').onclick = () => formGrao(g);
     if ($('#gFoto')) $('#gFoto').onclick = () => verFoto(g.foto);
+    if ($('#maisPacote')) $('#maisPacote').onclick = () => { addPacote(g); save(); toast(`Pacote adicionado: ${restante(g)} g em estoque`); render(); };
+    $('#semEst').onchange = (e) => { if (e.target.checked) g.semEstoque = true; else delete g.semEstoque; save(); toast(e.target.checked ? 'Marcado como sem estoque' : 'Voltou para as telas de extração'); render(); };
     $('#arq').onclick = () => { g.arquivado = !g.arquivado; save(); render(); };
   };
 
