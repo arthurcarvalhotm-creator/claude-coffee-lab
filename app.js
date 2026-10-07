@@ -119,6 +119,12 @@
   const metodoVisivel = (m) => m && !m.arquivado && !ocultos().includes(m.id);
   const metodosVisiveis = () => DB.metodos.filter(metodoVisivel);
   const nomeCurto = (m) => m.curto || m.nome.split(' (')[0];
+  /* Método que abre a extração por grão: o último usado com esse grão; senão a V60 */
+  function metodoInicial(graoId) {
+    const ult = state.extracoes.filter((x) => x.graoId === graoId && metodoVisivel(metodo(x.metodoId))).sort((a, b) => new Date(b.data) - new Date(a.data))[0];
+    if (ult) return ult.metodoId;
+    return metodoVisivel(DB.metodo.v60) ? 'v60' : (metodosVisiveis()[0] || DB.metodo.v60).id;
+  }
 
   /* Histórico grão × método × moedor em ordem cronológica, com diag */
   function historico(graoId, metodoId, moedorId) {
@@ -144,6 +150,12 @@
     if ((m = s.match(/^(\d+)\s*m(?:in)?$/))) return parseInt(m[1], 10) * 60;
     if ((m = s.match(/^(\d+(?:\.\d+)?)\s*s?$/))) return Math.round(parseFloat(m[1]));
     return null;
+  }
+  /* Tempo para campos editáveis: sempre m:ss (0:28, 2:45); horas como 14h */
+  function tempoCampo(sg) {
+    sg = Math.round(Number(sg) || 0);
+    if (sg >= 3600) return `${String(Math.round((sg / 3600) * 10) / 10).replace('.', ',')}h`;
+    return `${Math.floor(sg / 60)}:${String(sg % 60).padStart(2, '0')}`;
   }
   function nomeGrao(g) { return g ? g.nome : '(grão removido)'; }
   function badgeDiag(d) { return d ? `<span class="badge ${d.cor}">${esc(d.rotulo)}</span>` : ''; }
@@ -177,7 +189,7 @@
     if (!rec) return '';
     const esp = E.isEspresso(m);
     const rows = rec.etapas.map((e, i) => editable
-      ? `<tr data-row><td class="n">${i + 1}</td><td><input type="text" name="pt" value="${E.fmtTempo(e.t).replace(' s', '').replace(' h', 'h')}" inputmode="numeric" style="width:70px"></td><td><input type="number" name="pa" value="${e.acumulado}" step="0.1" inputmode="decimal" style="width:80px"></td><td><input type="text" name="pd" value="${esc(e.desc || '')}" placeholder="obs"></td><td><button type="button" class="rm" title="Remover">✕</button></td></tr>`
+      ? `<tr data-row><td class="n">${i + 1}</td><td><input type="text" name="pt" value="${tempoCampo(e.t)}" inputmode="numeric" style="width:70px"></td><td><input type="number" name="pa" value="${e.acumulado}" step="0.1" inputmode="decimal" style="width:80px"></td><td><input type="text" name="pd" value="${esc(e.desc || '')}" placeholder="obs"></td><td><button type="button" class="rm" title="Remover">✕</button></td></tr>`
       : `<tr><td class="n">${e.n || i + 1}</td><td>${E.fmtTempo(e.t)}</td><td><strong>${e.acumulado} g</strong>${e.despejo ? ` <small class="muted">(+${e.despejo})</small>` : ''}</td><td class="text-2">${esc(e.desc || '')}</td></tr>`).join('');
     return `<div class="tbl-wrap"><table class="pours"><thead><tr><th>#</th><th>Tempo</th><th>${esp ? 'Bebida acum.' : 'Água acum.'}</th><th>${editable ? 'Observação' : 'O que fazer'}</th>${editable ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>`;
   }
@@ -520,7 +532,7 @@
     const copiar = !!r.q.copiar, repetir = !!r.q.repetir;
     const pre = {
       graoId: (from && from.graoId) || r.q.grao || (state.graos.find(disponivel) || state.graos[0]).id,
-      metodoId: (from && from.metodoId) || (metodo(r.q.metodo) && r.q.metodo) || (metodosVisiveis()[0] || DB.metodo.v60).id,
+      metodoId: (from && from.metodoId) || (metodo(r.q.metodo) && r.q.metodo) || metodoInicial(r.q.grao || (state.graos.find(disponivel) || state.graos[0]).id),
       moedorId: (from && from.moedorId) || r.q.moedor || (moedorPadrao() || {}).id || ''
     };
     const mVia = r.q.via === 'metodo' ? metodo(pre.metodoId) : null;
@@ -607,13 +619,15 @@
     function aplicarReceita(p) {
       if (p.clicks != null && F('moedorId').value) F('clicks').value = p.clicks;
       F('dose').value = p.dose; F('ratio').value = p.ratio; F('water').value = p.water; F('tempC').value = p.tempC;
-      if (p.tempoS && !F('tempo').value) F('tempo').value = E.fmtTempo(p.tempoS).replace(' s', '').replace(' h', 'h');
+      if (p.tempoS && (!F('tempo').value || !tempoTocado)) F('tempo').value = tempoCampo(p.tempoS);
       aguaAnterior = +p.water || null;
       preencherPlano();
       atualizarReferencia();
     }
     /* Dose ↔ água ↔ razão. Mexer na dose recalcula a água mantendo a razão;
      * os despejos e o card de referência acompanham a nova água. */
+    let tempoTocado = false;
+    F('tempo').addEventListener('input', () => { tempoTocado = true; });
     let aguaAnterior = null, camposTocados = false, doseTocada = false, refReceita = null;
     const arred = (v) => (E.isEspresso(ctx().m) ? Math.round(v * 10) / 10 : Math.round(v));
     const escalada = (p, d) => (d && p && d !== p.dose ? Object.assign({}, p, { dose: d, water: arred(d * p.ratio) }) : p);
@@ -656,7 +670,7 @@
       let etapas = lerDespejos(f);
       if (!etapas.length) { const rc = E.receita(m, +F('dose').value || m.dosePadrao, +F('water').value); etapas = rc ? rc.etapas : [{ t: 0, acumulado: +F('water').value, desc: '' }]; }
       window.CafeTimer.open({ grao: g, metodo: m, moedor: md, dose: +F('dose').value, water: +F('water').value, tempC: +F('tempC').value, clicks: F('clicks').value, etapas }, (res) => {
-        if (res.tempoS) F('tempo').value = E.fmtTempo(res.tempoS).replace(' s', '').replace(' h', 'h');
+        if (res.tempoS) { F('tempo').value = tempoCampo(res.tempoS); tempoTocado = true; }
         if (res.etapas && res.etapas.length) $('#pours').innerHTML = tabelaReceita({ etapas: res.etapas }, m, true);
         toast(`Tempo registrado: ${E.fmtTempo(res.tempoS)}${res.drenagemS ? ' · drenagem marcada' : ''}`);
         F('tempo').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -750,7 +764,7 @@
     if (editando) {
       aplicarReceita({ clicks: editando.clicks, dose: editando.dose, ratio: editando.ratio, water: editando.water, tempC: editando.tempC, tempoS: null });
       if (editando.clicks == null || editando.clicks === '') F('clicks').value = '';
-      F('tempo').value = editando.tempoS ? E.fmtTempo(editando.tempoS).replace(' s', '').replace(' h', 'h') : '';
+      F('tempo').value = editando.tempoS ? tempoCampo(editando.tempoS) : '';
       F('tds').value = editando.tds != null ? editando.tds : '';
       $('#pours').innerHTML = editando.despejos && editando.despejos.length ? tabelaReceita({ etapas: editando.despejos }, ctx().m, true) : '';
       preencherSensorial(editando);
@@ -932,7 +946,7 @@
     const b0 = deBase || DB.metodo.v60;
     c = c || { nome: deBase ? `${nomeCurto(deBase)} (minha versão)` : '', ico: deBase ? deBase.ico : 'chaleira', base: b0.id, dosePadrao: b0.dosePadrao, ratio: { ...b0.ratio }, tempC: { ...b0.tempC }, tempoS: { ...b0.tempoS }, grind: b0.grind, grindDesc: b0.grindDesc, fluxo: b0.fluxo, receita: '', etapas: [] };
     const baseM = () => NATIVOS.find((x) => x.id === $('#fMet [name=base]').value) || DB.metodo.v60;
-    const tempoTxt = (v) => (v == null ? '' : E.fmtTempo(v).replace(' s', '').replace(' h', 'h'));
+    const tempoTxt = (v) => (v == null ? '' : tempoCampo(v));
     const usos = c.id ? state.extracoes.filter((x) => x.metodoId === c.id).length : 0;
     const planoAtual = () => {
       const bm = NATIVOS.find((x) => x.id === c.base) || b0;
