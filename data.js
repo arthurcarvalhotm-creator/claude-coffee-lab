@@ -293,17 +293,17 @@ window.CAFE_DB = (function () {
    * grind: descritor 1 (extrafina) … 7 (extragrossa) — usado para mapear
    * para cliques do moedor. microns: faixa de referência. ratio: gramas
    * de água por grama de café (espresso: bebida/dose). Dose de partida:
-   * 10 g (espresso 18 g). tempoS dos filtrados vale para 10 g; o motor
+   * 10 g (espresso 16 g). tempoS dos filtrados vale para 10 g; o motor
    * escala a faixa conforme a dose (faixaTempo). base = método cujo
    * comportamento este herda no motor (diagnóstico, referências de moedor). */
   const metodos = [
     {
       id: 'espresso', nome: 'Espresso', tipo: 'pressão', icone: '☕', fluxo: 2,
-      ratio: { min: 1.6, max: 3.0, padrao: 2.0 }, dosePadrao: 18,
+      ratio: { min: 1.6, max: 3.0, padrao: 2.0 }, dosePadrao: 16,
       tempC: { min: 88, max: 96, padrao: 93 }, tempoS: { min: 24, max: 34, padrao: 28 },
       grind: 1, microns: [200, 350], grindDesc: 'Fina (açúcar refinado)',
       sensibilidade: 'Alta: 1 clique fino costuma mudar 3–6 s no tempo de extração.',
-      receita: 'Dose 18 g → bebida 36–40 g em 25–30 s. Pré-infusão 3–8 s. Ajuste moagem para tempo; razão para intensidade/corpo.'
+      receita: 'Dose 16 g → bebida 32–36 g em 25–30 s. Pré-infusão 3–8 s. Ajuste moagem para tempo; razão para intensidade/corpo.'
     },
     {
       id: 'moka', nome: 'Moka (cafeteira italiana)', tipo: 'pressão', icone: '🫖', fluxo: 3,
@@ -408,25 +408,25 @@ window.CAFE_DB = (function () {
 
   /* Moedores populares como modelos de escala (o usuário pode editar) */
   const moedoresModelo = [
-    { nome: 'Timemore C2 / C3', tipo: 'manual', min: 0, max: 36, passo: 1, refs: { espresso: 8, moka: 12, aeropress: 16, v60: 19, kalita: 21, melitta: 21, 'coador-pano': 21, clever: 21, chemex: 24, 'prensa-francesa': 28, 'cold-brew': 30 } },
-    { nome: 'Comandante C40', tipo: 'manual', min: 0, max: 50, passo: 1, refs: { espresso: 10, moka: 14, aeropress: 18, v60: 24, kalita: 26, melitta: 26, 'coador-pano': 26, clever: 26, chemex: 30, 'prensa-francesa': 35, 'cold-brew': 38 } },
-    { nome: 'Hario Skerton / Mini Slim', tipo: 'manual', min: 0, max: 20, passo: 1, refs: { espresso: 3, moka: 5, aeropress: 7, v60: 9, kalita: 10, melitta: 10, 'coador-pano': 10, clever: 10, chemex: 12, 'prensa-francesa': 15, 'cold-brew': 17 } },
-    { nome: 'Baratza Encore', tipo: 'elétrico', min: 1, max: 40, passo: 1, refs: { espresso: 5, moka: 8, aeropress: 12, v60: 15, kalita: 17, melitta: 17, 'coador-pano': 17, clever: 17, chemex: 22, 'prensa-francesa': 28, 'cold-brew': 32 } },
+    { nome: 'Timemore C2 / C3', tipo: 'manual', min: 0, max: 36, passo: 1, refs: { espresso: 7, moka: 12, aeropress: 16, v60: 19, kalita: 21, melitta: 21, 'coador-pano': 21, clever: 21, chemex: 24, 'prensa-francesa': 28, 'cold-brew': 30 } },
+    { nome: 'Comandante C40', tipo: 'manual', min: 0, max: 50, passo: 1, refs: { espresso: 8, moka: 14, aeropress: 18, v60: 24, kalita: 26, melitta: 26, 'coador-pano': 26, clever: 26, chemex: 30, 'prensa-francesa': 35, 'cold-brew': 38 } },
+    { nome: 'Hario Skerton / Mini Slim', tipo: 'manual', min: 0, max: 20, passo: 1, refs: { espresso: 2, moka: 5, aeropress: 7, v60: 9, kalita: 10, melitta: 10, 'coador-pano': 10, clever: 10, chemex: 12, 'prensa-francesa': 15, 'cold-brew': 17 } },
+    { nome: 'Baratza Encore', tipo: 'elétrico', min: 1, max: 40, passo: 1, refs: { espresso: 4, moka: 8, aeropress: 12, v60: 15, kalita: 17, melitta: 17, 'coador-pano': 17, clever: 17, chemex: 22, 'prensa-francesa': 28, 'cold-brew': 32 } },
     { nome: 'Fellow Ode Gen 2', tipo: 'elétrico', min: 1, max: 11, passo: 0.33, refs: { moka: 1.5, aeropress: 2.5, v60: 4, kalita: 4.5, melitta: 4.5, 'coador-pano': 4.5, clever: 5, chemex: 6, 'prensa-francesa': 8, 'cold-brew': 9 } },
-    { nome: 'DF64 / Eureka Mignon (escala genérica 0–50)', tipo: 'elétrico', min: 0, max: 50, passo: 0.5, refs: { espresso: 8, moka: 14, aeropress: 22, v60: 28, kalita: 30, melitta: 30, 'coador-pano': 30, clever: 30, chemex: 34, 'prensa-francesa': 40, 'cold-brew': 44 } },
+    { nome: 'DF64 / Eureka Mignon (escala genérica 0–50)', tipo: 'elétrico', min: 0, max: 50, passo: 0.5, refs: { espresso: 6.5, moka: 14, aeropress: 22, v60: 28, kalita: 30, melitta: 30, 'coador-pano': 30, clever: 30, chemex: 34, 'prensa-francesa': 40, 'cold-brew': 44 } },
     { id: 'kingrinder-k2', nome: 'Kingrinder K2', tipo: 'manual', min: 0, max: 160, passo: 1, direcao: 'menor=fino', umPorClique: 18,
-      obs: '40 cliques por volta, 18 µm por clique. Conte os cliques a partir do zero (mós encostadas). Referências calibradas pelo uso real: espresso 30–50, coados 60–120.',
-      refs: { espresso: 40, moka: 55, aeropress: 70, v60: 80, kalita: 90, melitta: 95, 'coador-pano': 90, clever: 90, chemex: 105, 'prensa-francesa': 130, 'cold-brew': 140 } },
+      obs: '40 cliques por volta, 18 µm por clique. Conte os cliques a partir do zero (mós encostadas). Referências calibradas pelo uso real: espresso (16 g) 28–42, coados 60–120.',
+      refs: { espresso: 35, moka: 55, aeropress: 70, v60: 80, kalita: 90, melitta: 95, 'coador-pano': 90, clever: 90, chemex: 105, 'prensa-francesa': 130, 'cold-brew': 140 } },
     { id: 'starseeker-e55-pro', nome: 'Starseeker E55 Pro', tipo: 'elétrico', min: 0, max: 220, passo: 1, direcao: 'menor=fino', umPorClique: 10,
-      obs: 'Ajuste stepless: registre a marcação do anel (100 por volta, ~10 µm de abertura cada). Zero = mós encostadas. Referências calibradas pelo uso real: espresso 30–50, coados em torno de 120.',
-      refs: { espresso: 40, moka: 65, aeropress: 100, v60: 120, kalita: 128, melitta: 130, 'coador-pano': 128, clever: 128, chemex: 140, 'prensa-francesa': 170, 'cold-brew': 180 } },
+      obs: 'Ajuste stepless: registre a marcação do anel (100 por volta, ~10 µm de abertura cada). Zero = mós encostadas. Referências calibradas pelo uso real: espresso (16 g) 28–44, coados em torno de 120.',
+      refs: { espresso: 35, moka: 65, aeropress: 100, v60: 120, kalita: 128, melitta: 130, 'coador-pano': 128, clever: 128, chemex: 140, 'prensa-francesa': 170, 'cold-brew': 180 } },
     { id: '1zpresso-jx-pro', nome: '1Zpresso JX-Pro', tipo: 'manual', min: 0, max: 200, passo: 1, direcao: 'menor=fino', umPorClique: 12.5,
-      obs: '40 cliques por volta, 12,5 µm por clique. Registre em cliques totais a partir do zero (2 voltas e 10 cliques = 90). Referências calibradas pelo uso real: espresso 60–80, coados 110–150.',
-      refs: { espresso: 70, moka: 90, aeropress: 105, v60: 120, kalita: 130, melitta: 135, 'coador-pano': 130, clever: 130, chemex: 145, 'prensa-francesa': 165, 'cold-brew': 175 } },
+      obs: '40 cliques por volta, 12,5 µm por clique. Registre em cliques totais a partir do zero (2 voltas e 10 cliques = 90). Referências calibradas pelo uso real: espresso (16 g) 55–75, coados 110–150.',
+      refs: { espresso: 62, moka: 90, aeropress: 105, v60: 120, kalita: 130, melitta: 135, 'coador-pano': 130, clever: 130, chemex: 145, 'prensa-francesa': 165, 'cold-brew': 175 } },
     { id: 'tramontina-breville-express', nome: 'Tramontina by Breville Express', tipo: 'elétrico', min: 1, max: 60, passo: 1, direcao: 'menor=fino', passoAjuste: 2,
-      obs: 'Escala de 1 a 60 (menor = mais fino). Faixas do fabricante: espresso 3–12 (farinha de rosca / açúcar de confeiteiro), moka 13–20 (areia fina), cônicos V60/Koar 21–30 (sal fino / areia comum), Melitta/elétrica 25–35 (areia de praia), Chemex/Clever 35–45 (açúcar cristal), prensa 46–55 (sal grosso / trigo para quibe), cold brew 56–60 (pimenta-do-reino grossa).',
-      refs: { espresso: 8, moka: 16, aeropress: 22, v60: 25, kalita: 28, melitta: 30, 'coador-pano': 30, clever: 40, chemex: 40, 'prensa-francesa': 50, 'cold-brew': 58 } },
-    { nome: 'Genérico (0–40)', tipo: 'manual', min: 0, max: 40, passo: 1, refs: { espresso: 6, moka: 10, aeropress: 15, v60: 18, kalita: 20, melitta: 20, 'coador-pano': 20, clever: 20, chemex: 24, 'prensa-francesa': 30, 'cold-brew': 34 } }
+      obs: 'Escala de 1 a 60 (menor = mais fino). Faixas do fabricante calibradas para 16 g: espresso 3–10 (ideal 6), moka 13–20, cônicos V60/Koar 21–30, Melitta/elétrica 25–35, Chemex/Clever 35–45, prensa 46–55, cold brew 56–60.',
+      refs: { espresso: 6, moka: 16, aeropress: 22, v60: 25, kalita: 28, melitta: 30, 'coador-pano': 30, clever: 40, chemex: 40, 'prensa-francesa': 50, 'cold-brew': 58 } },
+    { nome: 'Genérico (0–40)', tipo: 'manual', min: 0, max: 40, passo: 1, refs: { espresso: 5, moka: 10, aeropress: 15, v60: 18, kalita: 20, melitta: 20, 'coador-pano': 20, clever: 20, chemex: 24, 'prensa-francesa': 30, 'cold-brew': 34 } }
   ];
 
   /* Descritores sensoriais (chips) */

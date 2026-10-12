@@ -123,7 +123,7 @@ window.Engine = (function () {
     if (moagemOff !== 0) por.push(`Moagem ${moagemOff > 0 ? 'mais grossa' : 'mais fina'} que o padrão do método (${r2(Math.abs(moagemOff))} passo).`);
 
     // dose / água
-    // dose de partida: 10 g (espresso 18 g); a dose do grão, se definida, vale fora do espresso
+    // dose de partida: 10 g (espresso 16 g); a dose do grão, se definida, vale fora do espresso
     const dose = (!isEspresso(method) && Number(bean.dosePadrao)) || method.dosePadrao;
     const water = isEspresso(method) ? r1(dose * ratio) : Math.round(dose * ratio);
     const TS = faixaTempo(method, dose);

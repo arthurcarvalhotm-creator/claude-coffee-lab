@@ -163,6 +163,17 @@
       if (!state.moedores.some((x) => x.modeloId === mm.id)) state.moedores.push({ id: uid(), modeloId: mm.id, nome: mm.nome, tipo: mm.tipo, min: mm.min, max: mm.max, passo: mm.passo, direcao: mm.direcao, passoAjuste: mm.passoAjuste, refs: { ...mm.refs }, obs: mm.obs });
       state.config.moedoresVersao = 6; save();
     }
+    if ((state.config.moedoresVersao || 0) < 7) { // Recalibração de moagem para espresso 16 g (cama menor no cesto requer moagem mais fina)
+      state.moedores.forEach((m) => {
+        const modelo = DB.moedoresModelo.find((x) => (x.id && x.id === m.modeloId) || x.nome === m.nome);
+        if (modelo && modelo.refs && modelo.refs.espresso != null) {
+          m.refs = m.refs || {};
+          m.refs.espresso = modelo.refs.espresso;
+          if (modelo.obs) m.obs = modelo.obs;
+        }
+      });
+      state.config.moedoresVersao = 7; save();
+    }
     if (!state.config.estoqueV2) { // moedor padrão E55 Pro; grãos que já zeraram ficam sem estoque
       const e55 = state.moedores.find((x) => x.modeloId === 'starseeker-e55-pro');
       if (e55 && !state.config.moedorPadrao) state.config.moedorPadrao = e55.id;
@@ -354,7 +365,27 @@
   /* ---------------- Tema ---------------- */
   function applyTheme() {
     const t = state.config.tema || 'auto';
-    if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+    const isDark = t === 'dark' || (t === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+
+    // Mantém a barra de gestos / navegação do Android e a status bar na cor da aplicação
+    const corTema = isDark ? '#1f1814' : '#6f4e37';
+    let metaTheme = $('meta[name="theme-color"]:not([media])');
+    if (!metaTheme) {
+      metaTheme = document.createElement('meta');
+      metaTheme.setAttribute('name', 'theme-color');
+      document.head.appendChild(metaTheme);
+    }
+    metaTheme.setAttribute('content', corTema);
+  }
+  if (window.matchMedia) {
+    try {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if ((state.config.tema || 'auto') === 'auto') applyTheme();
+      });
+    } catch (e) { /* fallback navegadores antigos */ }
   }
   $('#btnTheme').addEventListener('click', () => {
     const order = ['auto', 'light', 'dark'];
@@ -641,38 +672,378 @@
       </div>`;
     $('#del').onclick = () => { if (confirmar('Excluir esta extração?')) { state.extracoes = state.extracoes.filter((e) => e.id !== x.id); hooks.extracaoExcluida.forEach((fn) => fn(x)); save(); toast('Excluída'); go('#/diario'); } };
     $('#dup').onclick = () => go(`#/nova?from=${x.id}&copiar=1`);
-    $('#btnShare').onclick = async () => {
-      const notas = x.descritores && x.descritores.length ? `\nNotas sensoriais: ${x.descritores.join(', ')}` : '';
-      const notaStr = x.nota ? `\nAvaliação: ⭐ ${Number(x.nota).toFixed(1)}/10` : '';
-      const moagemStr = x.clicks != null ? `\nMoagem: ${E.fmtClicks(x.clicks)} cl${md ? ` (${md.nome})` : ''}` : '';
-      const texto = `☕ Receita de Café: ${nomeGrao(g)}
-Método: ${m.icone} ${m.nome}
+    $('#btnShare').onclick = () => modalCompartilharReceita(x, g, m, md);
+  };
+
+  /* ================== COMPARTILHAMENTO DE RECEITA EM PNG ================== */
+  function wrapCardText(text, maxChars = 40) {
+    const words = String(text || '').split(' ');
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      if ((cur + ' ' + w).trim().length > maxChars) {
+        if (cur) lines.push(cur.trim());
+        cur = w;
+      } else {
+        cur = (cur + ' ' + w).trim();
+      }
+    }
+    if (cur) lines.push(cur.trim());
+    return lines;
+  }
+
+  function gerarReceitaCardSvg({ grao, metodo, moedor, extracao, diag }) {
+    const g = grao || {};
+    const m = metodo || {};
+    const md = moedor || null;
+    const x = extracao || {};
+    const d = diag || (E.diagnostico ? E.diagnostico(x, m) : {});
+
+    const pingoInfo = window.Mascote && window.Mascote.porExtracao ? window.Mascote.porExtracao(x) : { humor: 'feliz', texto: 'Nível de cafeína e extração sob controle!' };
+    const humor = pingoInfo.humor || 'feliz';
+    const pingoTexto = pingoInfo.texto || 'Nível de cafeína e extração sob controle!';
+    const mascoteRawSvg = window.Mascote && window.Mascote.svg ? window.Mascote.svg(humor, { size: 190, anim: false }) : '';
+
+    const nomeG = nomeGrao(g);
+    const subGrao = [g.torrefacao, g.produtor, g.regiao ? (DB.regiao[g.regiao] || {}).nome || g.regiao : null].filter(Boolean).join(' • ') || 'Origem do Lote';
+
+    const badges = [];
+    if (g.processo) badges.push({ t: (DB.processo[g.processo] || {}).nome ? (DB.processo[g.processo].nome.split(' (')[0]) : g.processo, bg: '#2c2138', fg: '#b995dc' });
+    if (g.torra) badges.push({ t: `Torra ${(DB.torra[g.torra] || {}).nome || g.torra}`, bg: '#3d2416', fg: '#f0925a' });
+    if (g.variedade) badges.push({ t: g.variedade, bg: '#1d2b3d', fg: '#7fb0ea' });
+
+    const isEsp = E.isEspresso(m);
+    const doseStr = `${E.fmtN ? E.fmtN(x.dose) : x.dose} g`;
+    const waterLabel = isEsp ? 'BEBIDA EXTRAÍDA' : 'ÁGUA TOTAL';
+    const waterStr = `${E.fmtN ? E.fmtN(x.water) : x.water} g (1:${E.fmtN ? E.fmtN(x.ratio) : x.ratio})`;
+    const tempStr = `${E.fmtN ? E.fmtN(x.tempC) : x.tempC} °C`;
+    const tempoStr = E.fmtTempo ? E.fmtTempo(x.tempoS) : `${x.tempoS}s`;
+    const moagemVal = x.clicks != null ? `${E.fmtClicks ? E.fmtClicks(x.clicks) : x.clicks} cl` : '—';
+    const moagemSub = md ? md.nome : 'Padrão';
+
+    const notaStr = x.nota != null ? `${Number(x.nota).toFixed(1)}` : '—';
+    const dataFormatada = x.data ? new Date(x.data).toLocaleDateString('pt-BR', {
+      day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    }) : new Date().toLocaleDateString('pt-BR');
+
+    const descritores = (x.descritores || []).slice(0, 6);
+
+    let statusBg = '#17301f', statusFg = '#6fc290', statusLabel = 'Equilibrada • No alvo';
+    if (d.cor === 'sub') { statusBg = '#1d2b3d'; statusFg = '#7fb0ea'; statusLabel = 'Sub-extraída'; }
+    else if (d.cor === 'sobre') { statusBg = '#3d2416'; statusFg = '#f0925a'; statusLabel = 'Sobre-extraída'; }
+    else if (d.cor === 'misto') { statusBg = '#2c2138'; statusFg = '#b995dc'; statusLabel = 'Canalização / Misto'; }
+
+    const pingoLines = wrapCardText(`"${pingoTexto}"`, 42);
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1080" height="1350" viewBox="0 0 1080 1350" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="20%" r="85%">
+      <stop offset="0%" stop-color="#241a14"/>
+      <stop offset="60%" stop-color="#18110d"/>
+      <stop offset="100%" stop-color="#0f0b09"/>
+    </radialGradient>
+    <linearGradient id="cardGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#281f18"/>
+      <stop offset="100%" stop-color="#1d1510"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e8c298"/>
+      <stop offset="50%" stop-color="#c99e74"/>
+      <stop offset="100%" stop-color="#9d734c"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <style>
+    .font-sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  </style>
+
+  <rect width="1080" height="1350" fill="#0f0b09"/>
+  <rect x="24" y="24" width="1032" height="1302" rx="42" fill="url(#bgGrad)" stroke="#38291f" stroke-width="2.5"/>
+  <rect x="36" y="36" width="1008" height="1278" rx="32" fill="none" stroke="#c99e74" stroke-width="1.2" stroke-opacity="0.3"/>
+
+  <!-- Topo: Marca e Título do Laboratório -->
+  <g transform="translate(70, 75)" class="font-sans">
+    <circle cx="28" cy="28" r="28" fill="#2d2017" stroke="#c99e74" stroke-width="1.5"/>
+    <text x="28" y="37" font-size="28" text-anchor="middle">☕</text>
+    <text x="74" y="27" font-size="21" font-weight="800" fill="url(#goldGrad)" letter-spacing="3">LABORATÓRIO DE CAFETERIA</text>
+    <text x="74" y="47" font-size="14" font-weight="600" fill="#a49182" letter-spacing="1.5">FICHA TÉCNICA DE EXTRAÇÃO</text>
+  </g>
+
+  <!-- Data no Topo Direito -->
+  <g transform="translate(680, 85)" class="font-sans">
+    <rect width="330" height="38" rx="19" fill="#221812" stroke="#3a2b21" stroke-width="1"/>
+    <text x="165" y="24" font-size="13" font-weight="500" fill="#a49182" text-anchor="middle">${esc(dataFormatada)}</text>
+  </g>
+
+  <!-- Card do Grão Principal -->
+  <g transform="translate(70, 155)" class="font-sans" filter="url(#shadow)">
+    <rect width="940" height="165" rx="24" fill="url(#cardGrad)" stroke="#3e2d21" stroke-width="1.5"/>
+    <text x="40" y="58" font-size="34" font-weight="800" fill="#ffffff">${esc(nomeG)}</text>
+    <text x="40" y="92" font-size="19" font-weight="500" fill="#c6b6a6">${esc(subGrao)}</text>
+    <g transform="translate(40, 112)">
+      ${badges.map((b, i) => `
+        <g transform="translate(${i * 180}, 0)">
+          <rect width="165" height="32" rx="16" fill="${b.bg}" stroke="${b.fg}" stroke-width="1" stroke-opacity="0.4"/>
+          <text x="82.5" y="21" font-size="13" font-weight="700" fill="${b.fg}" text-anchor="middle">${esc(b.t)}</text>
+        </g>
+      `).join('')}
+    </g>
+  </g>
+
+  <!-- Grid de Parâmetros de Extração (6 cartões 2x3) -->
+  <g transform="translate(70, 345)" class="font-sans">
+    <g transform="translate(0, 0)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">MÉTODO</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#ffffff">${esc(m.nome || 'Método')}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">${esc(m.tipo || 'Extração')}</text>
+    </g>
+    <g transform="translate(321, 0)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">MOAGEM</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#e8c298">${esc(moagemVal)}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">${esc(moagemSub)}</text>
+    </g>
+    <g transform="translate(642, 0)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">${isEsp ? 'DOSE NO FILTRO' : 'DOSE DE CAFÉ'}</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#ffffff">${esc(doseStr)}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">${isEsp ? 'Cama de 16 g' : 'Grãos moídos'}</text>
+    </g>
+    <g transform="translate(0, 155)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">${esc(waterLabel)}</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#ffffff">${esc(waterStr)}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">Relação café:água</text>
+    </g>
+    <g transform="translate(321, 155)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">TEMPERATURA</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#ffffff">${esc(tempStr)}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">Água na extração</text>
+    </g>
+    <g transform="translate(642, 155)">
+      <rect width="298" height="135" rx="20" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+      <text x="26" y="38" font-size="13" font-weight="700" fill="#a49182" letter-spacing="1">TEMPO TOTAL</text>
+      <text x="26" y="80" font-size="25" font-weight="800" fill="#ffffff">${esc(tempoStr)}</text>
+      <text x="26" y="110" font-size="15" font-weight="500" fill="#c6b6a6">Tempo de extração</text>
+    </g>
+  </g>
+
+  <!-- Seção de Avaliação e Notas Sensoriais -->
+  <g transform="translate(70, 665)" class="font-sans" filter="url(#shadow)">
+    <rect width="940" height="160" rx="24" fill="url(#cardGrad)" stroke="#38291f" stroke-width="1.5"/>
+    <g transform="translate(36, 30)">
+      <rect width="180" height="100" rx="18" fill="#1b130e" stroke="#c99e74" stroke-width="1.5"/>
+      <text x="90" y="32" font-size="13" font-weight="700" fill="#a49182" text-anchor="middle" letter-spacing="1">AVALIAÇÃO</text>
+      <text x="90" y="78" font-size="34" font-weight="900" fill="#e8c298" text-anchor="middle">⭐ ${esc(notaStr)}</text>
+    </g>
+    <g transform="translate(245, 34)">
+      <rect width="210" height="34" rx="17" fill="${statusBg}" stroke="${statusFg}" stroke-width="1" stroke-opacity="0.5"/>
+      <text x="105" y="23" font-size="14" font-weight="700" fill="${statusFg}" text-anchor="middle">${esc(statusLabel)}</text>
+      <g transform="translate(0, 52)">
+        <text x="0" y="16" font-size="14" font-weight="600" fill="#a49182">Notas sensoriais percebidas:</text>
+        <g transform="translate(0, 26)">
+          ${descritores.length ? descritores.map((desc, i) => `
+            <g transform="translate(${i * 135}, 0)">
+              <rect width="125" height="28" rx="14" fill="#2d221a" stroke="#4a3729" stroke-width="1"/>
+              <text x="62.5" y="19" font-size="12" font-weight="600" fill="#f2eae2" text-anchor="middle">${esc(desc)}</text>
+            </g>
+          `).join('') : `<text x="0" y="19" font-size="13" fill="#8f7e6f" font-style="italic">Nenhum descritor registrado</text>`}
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- Seção do Mascote Pingo -->
+  <g transform="translate(70, 855)" class="font-sans">
+    <rect width="940" height="270" rx="26" fill="#1d1510" stroke="#3d2c20" stroke-width="1.5"/>
+    <g transform="translate(25, 40)">
+      ${mascoteRawSvg}
+    </g>
+    <g transform="translate(245, 45)">
+      <path d="M 0 50 L -18 60 L 0 70 Z" fill="#291e17"/>
+      <rect width="650" height="180" rx="22" fill="#291e17" stroke="#c99e74" stroke-width="1.2" stroke-opacity="0.4"/>
+      <text x="34" y="44" font-size="15" font-weight="800" fill="url(#goldGrad)" letter-spacing="1.5">PINGO ANALISA A EXTRAÇÃO</text>
+      <text x="34" y="86" font-size="20" font-weight="600" fill="#ffffff">
+        ${pingoLines.map((line, idx) => `<tspan x="34" dy="${idx === 0 ? 0 : 28}">${esc(line)}</tspan>`).join('')}
+      </text>
+      <text x="34" y="152" font-size="14" font-weight="500" fill="#a49182">— Pingo, o mascote do Laboratório ☕</text>
+    </g>
+  </g>
+
+  <!-- Rodapé -->
+  <g transform="translate(70, 1265)" class="font-sans">
+    <line x1="0" y1="0" x2="940" y2="0" stroke="#38291f" stroke-width="1.5"/>
+    <text x="0" y="32" font-size="15" font-weight="600" fill="#a49182">Laboratório de Cafeteria • Extrações &amp; Calibração</text>
+    <text x="940" y="32" font-size="15" font-weight="700" fill="url(#goldGrad)" text-anchor="end">cafelab.app</text>
+  </g>
+</svg>`;
+  }
+
+  function gerarReceitaPngBlob({ grao, metodo, moedor, extracao, diag }) {
+    const svgStr = gerarReceitaCardSvg({ grao, metodo, moedor, extracao, diag });
+    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 1080;
+          canvas.height = 1350;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          canvas.toBlob((b) => {
+            if (b) resolve(b);
+            else reject(new Error('Falha ao gerar blob do canvas'));
+          }, 'image/png');
+        } catch (e) {
+          URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Falha ao renderizar SVG no canvas'));
+      };
+      img.src = url;
+    });
+  }
+
+  async function modalCompartilharReceita(x, g, m, md) {
+    const d = withDiag(x).diag || {};
+    const isEsp = E.isEspresso(m);
+    const nomeG = nomeGrao(g);
+    const fileName = `receita-${nomeG.toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'cafe'}.png`;
+
+    const notasTxt = x.descritores && x.descritores.length ? `\nNotas sensoriais: ${x.descritores.join(', ')}` : '';
+    const notaTxt = x.nota ? `\nAvaliação: ⭐ ${Number(x.nota).toFixed(1)}/10` : '';
+    const moagemTxt = x.clicks != null ? `\nMoagem: ${E.fmtClicks(x.clicks)} cl${md ? ` (${md.nome})` : ''}` : '';
+    const textoLimpo = `☕ Receita de Café: ${nomeG}
+Método: ${m.nome}
 Dose: ${x.dose} g de café
-${E.isEspresso(m) ? 'Bebida' : 'Água'}: ${x.water} g (Razão 1:${E.fmtN(x.ratio)})
+${isEsp ? 'Bebida' : 'Água'}: ${x.water} g (Razão 1:${E.fmtN(x.ratio)})
 Temperatura: ${E.fmtN(x.tempC)} °C
-Tempo: ${E.fmtTempo(x.tempoS)}${moagemStr}${notaStr}${notas}
+Tempo: ${E.fmtTempo(x.tempoS)}${moagemTxt}${notaTxt}${notasTxt}
 
 Extraído no Laboratório de Cafeteria 🧪☕`;
 
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: `Receita: ${nomeGrao(g)} no ${m.nome}`,
-            text: texto
-          });
-          return;
-        } catch (e) {
-          if (e.name === 'AbortError') return;
+    modal(`
+      <div class="sheet-head">
+        <h2>Compartilhar Receita</h2>
+        <button class="btn sm ghost" data-close>✕</button>
+      </div>
+      <div class="card-preview-wrap">
+        <div class="card-preview-container" id="shareCardLoading">
+          <div class="empty"><div class="big">☕</div>Gerando imagem com o Pingo…</div>
+        </div>
+        <div class="share-actions-grid" id="shareActions" style="opacity:0.4;pointer-events:none">
+          <button class="btn primary sm" id="btnShareFile">📤 Compartilhar (PNG)</button>
+          <button class="btn sm" id="btnDownloadFile">⬇️ Baixar Imagem</button>
+          <button class="btn ghost sm" id="btnCopyImg">📋 Copiar Imagem</button>
+          <button class="btn ghost sm" id="btnCopyText">💬 Copiar Texto</button>
+        </div>
+      </div>
+    `);
+
+    try {
+      const pngBlob = await gerarReceitaPngBlob({ grao: g, metodo: m, moedor: md, extracao: x, diag: d });
+      const imgUrl = URL.createObjectURL(pngBlob);
+      const box = $('#shareCardLoading');
+      if (box) box.innerHTML = `<img src="${imgUrl}" class="card-preview-img" alt="Card da receita com mascote Pingo">`;
+
+      const actions = $('#shareActions');
+      if (actions) {
+        actions.style.opacity = '1';
+        actions.style.pointerEvents = 'auto';
+      }
+
+      const file = new File([pngBlob], fileName, { type: 'image/png' });
+
+      $('#btnShareFile').onclick = async () => {
+        if (navigator.share) {
+          try {
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                title: `Receita: ${nomeG} no ${m.nome}`,
+                text: `Receita de ${nomeG} no ${m.nome} — Laboratório de Cafeteria`,
+                files: [file]
+              });
+              return;
+            } else {
+              await navigator.share({
+                title: `Receita: ${nomeG} no ${m.nome}`,
+                text: textoLimpo
+              });
+              return;
+            }
+          } catch (err) {
+            if (err.name === 'AbortError') return;
+          }
         }
+        baixarArquivo(pngBlob, fileName);
+        toast('Imagem salva para compartilhar!');
+      };
+
+      $('#btnDownloadFile').onclick = () => {
+        baixarArquivo(pngBlob, fileName);
+        toast('Imagem baixada!');
+      };
+
+      $('#btnCopyImg').onclick = async () => {
+        if (navigator.clipboard && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+            toast('Imagem copiada!');
+            return;
+          } catch (e) { /* fallback */ }
+        }
+        toast('Cópia de imagem não suportada neste aparelho. Use Baixar ou Compartilhar.');
+      };
+
+      $('#btnCopyText').onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(textoLimpo);
+          toast('Texto da receita copiado!');
+        } catch (e) {
+          toast('Não foi possível copiar o texto');
+        }
+      };
+    } catch (err) {
+      const box = $('#shareCardLoading');
+      if (box) {
+        box.innerHTML = `<div class="empty"><div class="big">⚠️</div>Não foi possível gerar imagem.<br><small class="muted">${esc(err.message || err)}</small></div>`;
       }
-      try {
-        await navigator.clipboard.writeText(texto);
-        toast('Receita copiada para a área de transferência!');
-      } catch (e) {
-        toast('Não foi possível copiar a receita');
+      const actions = $('#shareActions');
+      if (actions) {
+        actions.style.opacity = '1';
+        actions.style.pointerEvents = 'auto';
       }
-    };
-  };
+      $('#btnCopyText').onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(textoLimpo);
+          toast('Texto copiado!');
+        } catch (e) { toast('Erro ao copiar'); }
+      };
+    }
+  }
+
+  function baixarArquivo(blob, nome) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
 
   function sens(x) { return { acidez: +x.acidez || 3, docura: +x.docura || 3, amargor: +x.amargor || 3, corpo: +x.corpo || 3, final: +x.final || 3 }; }
   function barraExtracao(d) {
@@ -1263,13 +1634,20 @@ Extraído no Laboratório de Cafeteria 🧪☕`;
     };
     view.innerHTML = `
       <div class="row between"><h2 style="margin:0">${r.q.estoque ? 'Estoque' : 'Seus grãos'}</h2><button class="btn primary sm" id="novo">＋ Novo grão</button></div>
-      <div class="row" style="margin-top:10px;gap:8px;align-items:center">
-        <input type="search" id="qGrao" placeholder="🔍 Buscar por nome, torrefação, notas…" style="flex:1;min-width:140px">
-        <label class="field ordem-graos" style="margin:0"><select id="ordemGraos">
-          <option value="estoque" ${ordem === 'estoque' ? 'selected' : ''}>Estoque restante</option>
-          <option value="nome" ${ordem === 'nome' ? 'selected' : ''}>Nome (A–Z)</option>
-          <option value="torrefacao" ${ordem === 'torrefacao' ? 'selected' : ''}>Torrefação</option>
-        </select></label>
+      <div class="graos-barra-filtros">
+        <div class="search-box">
+          <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <input type="search" id="qGrao" class="search-input" placeholder="Buscar grão, torrefação, notas…" autocomplete="off" spellcheck="false">
+          <button type="button" class="search-clear" id="btnLimparBusca" aria-label="Limpar busca" hidden>✕</button>
+        </div>
+        <div class="ordem-box">
+          <svg class="sort-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M6 12h12m-9 6h6"/></svg>
+          <select id="ordemGraos" class="ordem-select" aria-label="Ordenar grãos">
+            <option value="estoque" ${ordem === 'estoque' ? 'selected' : ''}>Estoque restante</option>
+            <option value="nome" ${ordem === 'nome' ? 'selected' : ''}>Nome (A–Z)</option>
+            <option value="torrefacao" ${ordem === 'torrefacao' ? 'selected' : ''}>Torrefação</option>
+          </select>
+        </div>
       </div>
       <small class="muted" style="display:block;margin-top:6px">${estoqueResumo().gramas} g em estoque. O estoque desconta a dose de cada extração registrada; cafés sem estoque não aparecem nas telas de extração.</small>
       <div class="list" id="listaGraos" style="margin-top:12px"></div>`;
@@ -1297,7 +1675,20 @@ Extraído no Laboratório de Cafeteria 🧪☕`;
     };
 
     renderLista('');
-    $('#qGrao', view).oninput = (e) => renderLista(e.target.value);
+    const qGrao = $('#qGrao', view);
+    const btnLimpar = $('#btnLimparBusca', view);
+    qGrao.oninput = (e) => {
+      renderLista(e.target.value);
+      if (btnLimpar) btnLimpar.hidden = !e.target.value;
+    };
+    if (btnLimpar) {
+      btnLimpar.onclick = () => {
+        qGrao.value = '';
+        btnLimpar.hidden = true;
+        renderLista('');
+        qGrao.focus();
+      };
+    }
     $('#ordemGraos').onchange = (e) => { state.config.ordemGraos = e.target.value; save(); render(); };
     $('#novo').onclick = () => formGrao();
     if (r.q.novo) { history.replaceState(null, '', '#/graos'); formGrao(); }
