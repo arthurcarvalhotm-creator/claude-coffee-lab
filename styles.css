@@ -8,6 +8,9 @@
   --radius: 14px; --shadow: 0 1px 2px rgba(40, 25, 10, .06), 0 4px 16px rgba(40, 25, 10, .06);
   --nav-h: 64px;
   --ico-acc: #c8742c;
+  color-scheme: light dark;
+}
+:root[data-theme="light"] {
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {

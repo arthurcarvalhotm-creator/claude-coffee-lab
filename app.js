@@ -372,13 +372,15 @@
 
     // Mantém a barra de gestos / navegação do Android e a status bar na cor da aplicação
     const corTema = isDark ? '#1f1814' : '#6f4e37';
-    let metaTheme = $('meta[name="theme-color"]:not([media])');
-    if (!metaTheme) {
-      metaTheme = document.createElement('meta');
+    const metasTheme = document.querySelectorAll('meta[name="theme-color"]');
+    if (metasTheme.length) {
+      metasTheme.forEach((m) => m.setAttribute('content', corTema));
+    } else {
+      const metaTheme = document.createElement('meta');
       metaTheme.setAttribute('name', 'theme-color');
+      metaTheme.setAttribute('content', corTema);
       document.head.appendChild(metaTheme);
     }
-    metaTheme.setAttribute('content', corTema);
   }
   if (window.matchMedia) {
     try {
